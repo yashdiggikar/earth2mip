@@ -214,6 +214,13 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
         else:
             yield from self._iterate(x=x, time=time)
 
+    import xarray as xr
+    import torch
+    
+    # Load the ERA5 temperature truth file (must be accessible in the container path)
+    truth_ds = xr.open_dataset("/xace/d1/era5_temp/era5_temp_2023_feb_mar_apr.nc")
+
+
     def _iterate(self, x, normalize=True, time=None):
         """Yield (time, unnormalized data, restart) tuples
 
@@ -243,6 +250,23 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
                     x += self.source(x_with_units, time) / self.scale * dt
                 x = self.model(x, time)
                 time = time + self.time_step
+                        # --- Inject ERA5 truth temperature (t) at 13 pressure levels ---
+                try:
+                    # Get truth temperature for current forecast time step
+                    truth_np = truth_ds["t"].sel(time=time, method="nearest").values  # shape: [13, lat, lon]
+                    truth_tensor = torch.from_numpy(truth_np).float().to(x.device)
+        
+                    # Normalize using model's mean and std (center, scale)
+                    center_t = self.center[0, 0, 47:60, :, :]  # for channels t50–t1000
+                    scale_t = self.scale[0, 0, 47:60, :, :]
+                    normalized_truth = (truth_tensor - center_t) / scale_t
+        
+                    # Inject normalized truth into model state at current time step
+                    x[:, -1, 47:60, :, :] = normalized_truth
+                except Exception as e:
+                    print(f"[ERA5 Injection Error] {e}")
+                # --------------------------------------------------------------
+        
 
                 # create args and kwargs for future use
                 restart = dict(x=x, normalize=False, time=time)
