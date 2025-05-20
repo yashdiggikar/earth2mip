@@ -253,24 +253,32 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
                 x = self.model(x, time)
                 time = time + self.time_step
                 try:
-                    # Convert time to index offset
+                    import torch
+                
+                    # Get index offset based on 12-hour steps from 2023-02-01 00:00
                     start_time = datetime.datetime(2023, 2, 1, 0, 0)
                     step_index = int((time - start_time).total_seconds() / 43200)
                 
-                    # Read ERA5 truth and fix shape
-                    truth_np = truth_ds["t"].isel(valid_time=step_index).values
-                    truth_tensor = torch.from_numpy(truth_np).float().unsqueeze(0).to(x.device)  # (1, 13, H, W)
+                    # Extract ERA5 truth temp at current time step (valid_time), shape (13, 721, 1440)
+                    truth_np = truth_ds["t"].isel(valid_time=step_index).values  # numpy array
                 
-                    # Normalize
-                    center_t = self.center[0, 0, 47:60, :, :]
-                    scale_t = self.scale[0, 0, 47:60, :, :]
+                    # Convert to tensor and reshape to match model expectation: (batch=1, channel=13, lat, lon)
+                    truth_tensor = torch.from_numpy(truth_np).float().unsqueeze(0).to(x.device)
+                
+                    # Extract corresponding center/scale: (1, 13, lat, lon)
+                    center_t = self.center[0, 0, 47:60]  # (13, lat, lon)
+                    scale_t = self.scale[0, 0, 47:60]    # (13, lat, lon)
+                
+                    # Normalize: shape (1, 13, lat, lon)
                     normalized_truth = (truth_tensor - center_t) / scale_t
                 
-                    # Inject into model state
+                    # Inject into model state at latest time step
                     x[:, -1, 47:60, :, :] = normalized_truth
+                
                     print(f"✅ Injected truth for step {step_index} ({time})")
                 except Exception as e:
                     print(f"[ERA5 Injection Error at {time}] {e}")
+
 
         
 
