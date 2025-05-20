@@ -256,37 +256,31 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
                     x += self.source(x_with_units, time) / self.scale * dt
                 x = self.model(x, time)
                 time = time + self.time_step
+                import datetime
+                import torch as th  # ✅ safe alias to avoid UnboundLocalError
+                
                 try:
-                    import datetime
-                    import torch
+                    # 🕒 Calculate step index: 12-hour intervals from Feb 1, 2023
+                    step_index = int((time - datetime.datetime(2023, 2, 1, 0, 0)).total_seconds() / 43200)
                 
-                    # Step index based on 12-hour intervals since 2023-02-01 00:00
-                    start_time = datetime.datetime(2023, 2, 1, 0, 0)
-                    step_index = int((time - start_time).total_seconds() / 43200)
+                    # 📥 Load ERA5 truth at this step
+                    truth_np = truth_ds["t"].isel(valid_time=step_index).values  # shape: (13, 721, 1440)
+                    truth_tensor = th.from_numpy(truth_np).float().unsqueeze(0).to(x.device)  # (1, 13, H, W)
                 
-                    # Load ERA5 truth (13, 721, 1440)
-                    truth_np = truth_ds["t"].isel(valid_time=step_index).values
-                    truth_tensor = torch.from_numpy(truth_np).float().unsqueeze(0).to(x.device)  # (1, 13, 721, 1440)
+                    # 📐 Get model tensor shape
+                    B, T, C, H, W = x.shape
+                    print(f"🔍 step={step_index}, time={time}, x.shape={x.shape}, truth.shape={truth_tensor.shape}")
                 
-                    # Get model state shape
-                    B, T, C, H, W = x.shape  # e.g. (1, 1, 69, 721, 1440)
-                
-                    # Diagnostics
-                    print(f"🔍 step_index: {step_index}, time: {time}")
-                    print(f"truth_tensor shape: {truth_tensor.shape}")
-                    print(f"x shape: {x.shape}")
-                    print(f"model expects: H={H}, W={W}")
-                
-                    # Broadcast mean/std for temp channels only (47–59)
+                    # 📊 Broadcast model normalization stats (mean/scale) for temp channels 47–59
                     center_t = self.center[:, :, 47:60, :H, :W]  # (1, 1, 13, H, W)
                     scale_t = self.scale[:, :, 47:60, :H, :W]    # (1, 1, 13, H, W)
                 
-                    # Expand truth to match normalization shape
+                    # 🧮 Reshape truth_tensor to match normalization shape
                     truth_tensor = truth_tensor.unsqueeze(1)  # (1, 1, 13, H, W)
                 
-                    # Normalize and inject
+                    # 🔁 Normalize and inject
                     normalized_truth = (truth_tensor - center_t) / scale_t
-                    x[:, -1, 47:60, :, :] = normalized_truth.squeeze(1)  # (1, 13, H, W)
+                    x[:, -1, 47:60, :, :] = normalized_truth.squeeze(1)  # inject shape: (1, 13, H, W)
                 
                     print(f"✅ Injected truth for step {step_index} ({time})")
                 
