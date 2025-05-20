@@ -227,75 +227,56 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
 
 
 
-    def _iterate(self, x, normalize=True, time=None):
-        """Yield (time, unnormalized data, restart) tuples
+   def _iterate(self, x, normalize=True, time=None):
+    """Yield (time, unnormalized data, restart) tuples"""
+    if self.time_dependent and not time:
+        raise ValueError("Time dependent models require ``time``.")
+    time = time or datetime.datetime(1900, 1, 1)
 
-        restart = (time, unnormalized data)
-        """
-        if self.time_dependent and not time:
-            raise ValueError("Time dependent models require ``time``.")
-        time = time or datetime.datetime(1900, 1, 1)
-        with torch.no_grad():
-            # drop all but the last time point
-            # remove channels
+    with torch.no_grad():
+        _, n_time_levels, n_channels, _, _ = x.shape
+        assert n_time_levels == self.n_history + 1
 
-            _, n_time_levels, n_channels, _, _ = x.shape
-            assert n_time_levels == self.n_history + 1  # noqa
+        if normalize:
+            x = (x - self.center) / self.scale
 
-            if normalize:
-                x = (x - self.center) / self.scale
+        # Yield initial frame
+        restart = dict(x=x, normalize=False, time=time)
+        yield time, self.scale * x[:, -1] + self.center, restart
 
-            # yield initial time for convenience
+        while True:
+            # 🔁 Predict next state
+            x = self.model(x, time)
+
+            # ⏩ Advance time
+            time = time + self.time_step
+
+            try:
+                # 📅 Compute index into ERA5 file (12-hourly)
+                step_index = int((time - datetime.datetime(2023, 2, 1)).total_seconds() / 43200)
+
+                # 📥 Load ERA5 truth temp at current step
+                truth_np = truth_ds["t"].isel(valid_time=step_index).values  # (13, 721, 1440)
+                truth_tensor = torch.from_numpy(truth_np).float().unsqueeze(0).to(x.device)  # (1, 13, 721, 1440)
+
+                # 🔁 Normalize using pre-loaded center/scale (only t channels)
+                center_t = self.center[47:60].unsqueeze(0)  # (1, 13, 1, 1)
+                scale_t = self.scale[47:60].unsqueeze(0)    # (1, 13, 1, 1)
+                normalized_truth = (truth_tensor - center_t) / scale_t  # (1, 13, 721, 1440)
+
+                # 🧠 Inject normalized ERA5 t into x (at the current step's input)
+                x[:, -1, 47:60, :, :] = normalized_truth
+
+                print(f"✅ Injected truth for step {step_index} ({time})")
+
+            except Exception as e:
+                print(f"💥 [❌ ERA5 Injection Error at {time}] {e}")
+
+            # 📝 Yield the output frame
+            out = self.scale * x[:, -1] + self.center
             restart = dict(x=x, normalize=False, time=time)
-            yield time, self.scale * x[:, -1] + self.center, restart
+            yield time, out, restart
 
-            while True:
-                if self.source:
-                    x_with_units = x * self.scale + self.center
-                    dt = torch.tensor(self.time_step.total_seconds())
-                    x += self.source(x_with_units, time) / self.scale * dt
-                x = self.model(x, time)
-                time = time + self.time_step
-                import datetime
-                import torch as th
-                
-                try:
-                    # Calculate index for this step
-                    step_index = int((time - datetime.datetime(2023, 2, 1)).total_seconds() / 43200)
-                
-                    # Load ERA5 truth tensor (1, 13, H, W)
-                    truth_np = truth_ds["t"].isel(valid_time=step_index).values
-                    truth_tensor = th.from_numpy(truth_np).float().unsqueeze(0).to(x.device)
-                
-                    # Extract normalization stats from center/scale (shape: 73 x 1 x 1)
-                    # Slice only temp channels: 47 to 60 (13 channels)
-                    center_t = self.center[47:60]  # shape: (13, 1, 1)
-                    scale_t = self.scale[47:60]    # shape: (13, 1, 1)
-                
-                    # Reshape for broadcast: (1, 13, 1, 1)
-                    center_t = center_t.unsqueeze(0)
-                    scale_t = scale_t.unsqueeze(0)
-                
-                    # Normalize truth_tensor: (1, 13, H, W)
-                    normalized_truth = (truth_tensor - center_t) / scale_t
-                
-                    # Inject normalized truth
-                    x[:, -1, 47:60, :, :] = normalized_truth
-                
-                    print(f"✅ Injected truth for step {step_index} ({time})")
-                
-                except Exception as e:
-                    print(f"💥 [❌ ERA5 Injection Error at {time}] {e}")
-
-
-
-
-        
-
-                # create args and kwargs for future use
-                restart = dict(x=x, normalize=False, time=time)
-                out = self.scale * x[:, -1] + self.center
-                yield time, out, restart
 
 
 def _default_inference(package, metadata: schema.Model, device):
