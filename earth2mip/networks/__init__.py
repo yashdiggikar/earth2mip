@@ -257,35 +257,49 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
                 x = self.model(x, time)
                 time = time + self.time_step
                 import datetime
-                import torch as th  # ✅ safe alias to avoid UnboundLocalError
+                import torch as th
                 
                 try:
-                    # 🕒 Calculate step index: 12-hour intervals from Feb 1, 2023
-                    step_index = int((time - datetime.datetime(2023, 2, 1, 0, 0)).total_seconds() / 43200)
+                    # Step index
+                    step_index = int((time - datetime.datetime(2023, 2, 1)).total_seconds() / 43200)
                 
-                    # 📥 Load ERA5 truth at this step
-                    truth_np = truth_ds["t"].isel(valid_time=step_index).values  # shape: (13, 721, 1440)
+                    # Load truth
+                    truth_np = truth_ds["t"].isel(valid_time=step_index).values
                     truth_tensor = th.from_numpy(truth_np).float().unsqueeze(0).to(x.device)  # (1, 13, H, W)
                 
-                    # 📐 Get model tensor shape
+                    # Model state shape
                     B, T, C, H, W = x.shape
-                    print(f"🔍 step={step_index}, time={time}, x.shape={x.shape}, truth.shape={truth_tensor.shape}")
                 
-                    # 📊 Broadcast model normalization stats (mean/scale) for temp channels 47–59
+                    # 🧪 Diagnostic: Print everything
+                    print(f"\n🔍 step={step_index}, time={time}")
+                    print(f"🔹 x.shape = {x.shape}")
+                    print(f"🔹 truth_tensor.shape = {truth_tensor.shape}")
+                    print(f"🔹 x[:, -1, 47:60, :, :].shape = {x[:, -1, 47:60, :, :].shape}")
+                    print(f"🔹 self.center.shape = {self.center.shape}")
+                    print(f"🔹 self.scale.shape  = {self.scale.shape}")
+                
+                    # Center/scale slices
                     center_t = self.center[:, :, 47:60, :H, :W]  # (1, 1, 13, H, W)
                     scale_t = self.scale[:, :, 47:60, :H, :W]    # (1, 1, 13, H, W)
                 
-                    # 🧮 Reshape truth_tensor to match normalization shape
+                    print(f"🔹 center_t.shape = {center_t.shape}")
+                    print(f"🔹 scale_t.shape  = {scale_t.shape}")
+                
+                    # Expand truth to match
                     truth_tensor = truth_tensor.unsqueeze(1)  # (1, 1, 13, H, W)
                 
-                    # 🔁 Normalize and inject
+                    # Normalize
                     normalized_truth = (truth_tensor - center_t) / scale_t
-                    x[:, -1, 47:60, :, :] = normalized_truth.squeeze(1)  # inject shape: (1, 13, H, W)
                 
+                    print(f"🔹 normalized_truth.shape = {normalized_truth.shape}")
+                
+                    # Inject
+                    x[:, -1, 47:60, :, :] = normalized_truth.squeeze(1)  # (1, 13, H, W)
                     print(f"✅ Injected truth for step {step_index} ({time})")
                 
                 except Exception as e:
-                    print(f"[❌ ERA5 Injection Error at {time}] {e}")
+                    print(f"\n💥 [❌ ERA5 Injection Error at {time}] {e}\n")
+
 
 
 
