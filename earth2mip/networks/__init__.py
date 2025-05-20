@@ -23,6 +23,13 @@ from typing import Any, Callable, Iterator, Optional, Tuple
 import numpy as np
 import torch
 from modulus.utils.zenith_angle import cos_zenith_angle
+import xarray as xr
+import torch
+
+print("📂 Loading ERA5 truth dataset...")
+truth_ds = xr.open_dataset("/xace/d1/era5_temp/era5_temp_2023_feb_mar_apr.nc")
+print("✅ ERA5 dataset loaded.")
+
 
 import earth2mip.grid
 from earth2mip import (
@@ -214,11 +221,6 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
         else:
             yield from self._iterate(x=x, time=time)
 
-    import xarray as xr
-    import torch
-    
-    # Load the ERA5 temperature truth file (must be accessible in the container path)
-    truth_ds = xr.open_dataset("/xace/d1/era5_temp/era5_temp_2023_feb_mar_apr.nc")
 
 
     def _iterate(self, x, normalize=True, time=None):
