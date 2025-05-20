@@ -253,20 +253,20 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
                 x = self.model(x, time)
                 time = time + self.time_step
                 try:
-                    # Convert forecast time to index
+                    # Convert time to index offset
                     start_time = datetime.datetime(2023, 2, 1, 0, 0)
                     step_index = int((time - start_time).total_seconds() / 43200)
                 
-                    # Read ERA5 truth temperature at that step
+                    # Read ERA5 truth and fix shape
                     truth_np = truth_ds["t"].isel(valid_time=step_index).values
-                    truth_tensor = torch.from_numpy(truth_np).float().to(x.device)
+                    truth_tensor = torch.from_numpy(truth_np).float().unsqueeze(0).to(x.device)  # (1, 13, H, W)
                 
-                    # Normalize with model's center and scale for temp channels (13 levels)
+                    # Normalize
                     center_t = self.center[0, 0, 47:60, :, :]
                     scale_t = self.scale[0, 0, 47:60, :, :]
                     normalized_truth = (truth_tensor - center_t) / scale_t
                 
-                    # Inject truth into current model state
+                    # Inject into model state
                     x[:, -1, 47:60, :, :] = normalized_truth
                     print(f"✅ Injected truth for step {step_index} ({time})")
                 except Exception as e:
