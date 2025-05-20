@@ -252,22 +252,26 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
                     x += self.source(x_with_units, time) / self.scale * dt
                 x = self.model(x, time)
                 time = time + self.time_step
-                        # --- Inject ERA5 truth temperature (t) at 13 pressure levels ---
                 try:
-                    # Get truth temperature for current forecast time step
-                    truth_np = truth_ds["t"].sel(time=time, method="nearest").values  # shape: [13, lat, lon]
+                    # Convert forecast time to index
+                    start_time = datetime.datetime(2023, 2, 1, 0, 0)
+                    step_index = int((time - start_time).total_seconds() / 43200)
+                
+                    # Read ERA5 truth temperature at that step
+                    truth_np = truth_ds["t"].isel(valid_time=step_index).values
                     truth_tensor = torch.from_numpy(truth_np).float().to(x.device)
-        
-                    # Normalize using model's mean and std (center, scale)
-                    center_t = self.center[0, 0, 47:60, :, :]  # for channels t50–t1000
+                
+                    # Normalize with model's center and scale for temp channels (13 levels)
+                    center_t = self.center[0, 0, 47:60, :, :]
                     scale_t = self.scale[0, 0, 47:60, :, :]
                     normalized_truth = (truth_tensor - center_t) / scale_t
-        
-                    # Inject normalized truth into model state at current time step
+                
+                    # Inject truth into current model state
                     x[:, -1, 47:60, :, :] = normalized_truth
+                    print(f"✅ Injected truth for step {step_index} ({time})")
                 except Exception as e:
-                    print(f"[ERA5 Injection Error] {e}")
-                # --------------------------------------------------------------
+                    print(f"[ERA5 Injection Error at {time}] {e}")
+
         
 
                 # create args and kwargs for future use
