@@ -257,7 +257,6 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
                 x = self.model(x, time)
                 time = time + self.time_step
                 try:
-                    import torch
                 
                     # Get index offset based on 12-hour steps from 2023-02-01 00:00
                     start_time = datetime.datetime(2023, 2, 1, 0, 0)
