@@ -13,6 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import torch
 
 import datetime
 import sys
@@ -20,16 +21,14 @@ import urllib
 import warnings
 from typing import Any, Callable, Iterator, Optional, Tuple
 import numpy as np
-import torch
 import xarray as xr
 import datetime
 
 
 import numpy as np
-import torch
 from modulus.utils.zenith_angle import cos_zenith_angle
 import xarray as xr
-import torch
+
 
 print("📂 Loading ERA5 truth dataset...")
 truth_ds = xr.open_dataset("/xace/d1/era5_temp/era5_temp_2023_feb_mar_apr.nc")
