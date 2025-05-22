@@ -227,7 +227,7 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
 
 
 
-   def _iterate(self, x, normalize=True, time=None):
+def _iterate(self, x, normalize=True, time=None):
     """Yield (time, unnormalized data, restart) tuples"""
     if self.time_dependent and not time:
         raise ValueError("Time dependent models require ``time``.")
@@ -252,30 +252,30 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
             time = time + self.time_step
 
             try:
-                # 📅 Compute index into ERA5 file (12-hourly)
+                # 📅 Compute index into ERA5 file (12-hour steps)
                 step_index = int((time - datetime.datetime(2023, 2, 1)).total_seconds() / 43200)
 
                 # 📥 Load ERA5 truth temp at current step
                 truth_np = truth_ds["t"].isel(valid_time=step_index).values  # (13, 721, 1440)
                 truth_tensor = torch.from_numpy(truth_np).float().unsqueeze(0).to(x.device)  # (1, 13, 721, 1440)
 
-                # 🔁 Normalize using pre-loaded center/scale (only t channels)
+                # 🔁 Normalize using t-channel stats
                 center_t = self.center[47:60].unsqueeze(0)  # (1, 13, 1, 1)
                 scale_t = self.scale[47:60].unsqueeze(0)    # (1, 13, 1, 1)
                 normalized_truth = (truth_tensor - center_t) / scale_t  # (1, 13, 721, 1440)
 
-                # 🧠 Inject normalized ERA5 t into x (at the current step's input)
+                # 🧠 Inject normalized ERA5 t into forecast input
                 x[:, -1, 47:60, :, :] = normalized_truth
-
                 print(f"✅ Injected truth for step {step_index} ({time})")
 
             except Exception as e:
                 print(f"💥 [❌ ERA5 Injection Error at {time}] {e}")
 
-            # 📝 Yield the output frame
+            # 📝 Yield output
             out = self.scale * x[:, -1] + self.center
             restart = dict(x=x, normalize=False, time=time)
             yield time, out, restart
+
 
 
 
