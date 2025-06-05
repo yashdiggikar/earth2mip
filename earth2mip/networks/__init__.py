@@ -228,82 +228,77 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
 
 
     def _iterate(self, x, normalize=True, time=None):
-            if self.time_dependent and not time:
-                raise ValueError("Time dependent models require time.")
-            time = time or datetime.datetime(1900, 1, 1)
-
-            with torch.no_grad():
-                _, n_time_levels, n_channels, _, _ = x.shape
-                assert n_time_levels == self.n_history + 1
-
-                if normalize:
-                    x = (x - self.center) / self.scale
-
-                # First step
+        if self.time_dependent and not time:
+            raise ValueError("Time dependent models require time.")
+        time = time or datetime.datetime(1900, 1, 1)
+    
+        with torch.no_grad():
+            _, n_time_levels, n_channels, _, _ = x.shape
+            assert n_time_levels == self.n_history + 1
+    
+            if normalize:
+                x = (x - self.center) / self.scale
+    
+            # Yield initial step
+            restart = dict(x=x, normalize=False, time=time)
+            yield time, self.scale * x[:, -1] + self.center, restart
+    
+            step = 0
+            blend_alpha = 0.5  # Soft truth injection
+    
+            while True:
+                x = self.model(x, time)
+                time = time + self.time_step
+                step += 1
+    
+                out = self.scale * x[:, -1] + self.center
+    
+                if hasattr(self, "truth_ds") and step >= 120:
+                    try:
+                        # Get truth
+                        target_levels = [50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]
+                        truth_np = self.truth_ds["t"].sel(pressure_level=target_levels).isel(valid_time=step).values
+                        truth_np = np.clip(truth_np, 180.0, 320.0)
+    
+                        center_t = self.center[47:60].view(1, 13, 1, 1)
+                        scale_t = self.scale[47:60].view(1, 13, 1, 1)
+                        truth_tensor = torch.from_numpy(truth_np).float().unsqueeze(0).to(x.device)
+                        normalized_truth = (truth_tensor - center_t) / scale_t
+                        normalized_truth = torch.clamp(normalized_truth, -3.0, 3.0)
+    
+                        # Before injection: RMSE debug
+                        levels = {"t300": 5, "t500": 7, "t1000": 12}
+                        for label, idx in levels.items():
+                            pred_val = out[:, 47 + idx].cpu().numpy()
+                            true_val = truth_np[idx]
+                            rmse_before = np.sqrt(np.mean((pred_val - true_val) ** 2))
+                            print(f"📊 Step {step} | RMSE before injection ({label}): {rmse_before:.2f}")
+    
+                        # Inject into input for next step
+                        x[:, -1, 47:60] = (
+                            blend_alpha * normalized_truth +
+                            (1 - blend_alpha) * x[:, -1, 47:60]
+                        )
+    
+                        # Update output too
+                        out[:, 47:60] = self.scale[47:60].view(1, 13, 1, 1) * x[:, -1, 47:60] + self.center[47:60].view(1, 13, 1, 1)
+    
+                        # After injection: RMSE debug
+                        for label, idx in levels.items():
+                            updated_val = out[:, 47 + idx].cpu().numpy()
+                            true_val = truth_np[idx]
+                            rmse_after = np.sqrt(np.mean((updated_val - true_val) ** 2))
+                            print(f"📈 Step {step} | RMSE after injection ({label}): {rmse_after:.2f}")
+    
+                        print(f"✅ Injected truth at step {step} | Time: {time}")
+    
+                    except Exception as e:
+                        print(f"💥 Injection error at step {step} | Time: {time} → {e}")
+    
+                # Yield forecast
                 restart = dict(x=x, normalize=False, time=time)
-                yield time, self.scale * x[:, -1] + self.center, restart
+                yield time, out, restart
 
-                step = 0
-                blend_alpha = 0.5  # Soft truth injection: 0 = no truth, 1 = full overwrite
-
-                while True:
-                    if step in [121, 122]:
-                        print(f"\n🔍 Step {step} INPUT to model:")
-                        print(f"  → Full mean: {x[:, -1].mean().item():.2f}")
-                        print(f"  → Temp (47:60) mean: {x[:, -1, 47:60].mean().item():.2f}")
-                        print(f"     min: {x[:, -1, 47:60].min().item():.2f}, max: {x[:, -1, 47:60].max().item():.2f}")
-
-                    x = self.model(x, time)
-                    time = time + self.time_step
-                    step += 1
-
-                    out = self.scale * x[:, -1] + self.center
-
-                    if step in [121, 122]:
-                        pred_temp = out[:, 47:60].cpu().numpy()
-                        print(f"\n🧪 Step {step} OUTPUT from model (predicted temp):")
-                        print(f"  → Mean: {pred_temp.mean():.2f}, Std: {pred_temp.std():.2f}")
-                        print(f"     min: {pred_temp.min():.2f}, max: {pred_temp.max():.2f}")
-
-                    if hasattr(self, "truth_ds") and step >= 121:
-                        try:
-                            # ✅ Select only the 13 matching pressure levels
-                            target_levels = [50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]
-                            truth_np = self.truth_ds["t"].sel(
-                                pressure_level=target_levels
-                            ).isel(valid_time=step).values
-                            truth_np = np.clip(truth_np, 180.0, 320.0)
-
-                            center_t = self.center[47:60].view(1, 13, 1, 1)
-                            scale_t = self.scale[47:60].view(1, 13, 1, 1)
-                            truth_tensor = torch.from_numpy(truth_np).float().unsqueeze(0).to(x.device)
-                            normalized_truth = (truth_tensor - center_t) / scale_t
-                            normalized_truth = torch.clamp(normalized_truth, -3.0, 3.0)
-
-                            x[:, -1, 47:60] = (
-                                blend_alpha * normalized_truth +
-                                (1 - blend_alpha) * x[:, -1, 47:60]
-                            )
-
-                            # Time alignment debug
-                            truth_time = self.truth_ds["t"].isel(valid_time=step).valid_time.values
-                            print(f"\n⏱️ Time Alignment Debug | Step {step}")
-                            print(f"   🔮 Forecast Time: {time}")
-                            print(f"   🕒 ERA5 Truth Time: {truth_time}")
-                            if str(np.datetime64(time)) != str(truth_time):
-                                print("⚠️  MISMATCH! Forecast time and ERA5 truth time do NOT align!")
-
-                            print(f"✅ Soft-injected ERA5 temperature at step {step:03d} | alpha={blend_alpha} | Time: {time}")
-                            if step in [121, 122]:
-                                print(f"\n📌 ERA5 Truth stats (step {step}):")
-                                print(f"  → Truth physical: min {truth_np.min():.2f}, max {truth_np.max():.2f}")
-                                print(f"  → Truth normalized: min {normalized_truth.min().item():.2f}, max {normalized_truth.max().item():.2f}")
-
-                        except Exception as e:
-                            print(f"💥 [Injection Error at step {step} | {time}]: {e}")
-
-                    restart = dict(x=x, normalize=False, time=time)
-                    yield time, out, restart
 
 
 
