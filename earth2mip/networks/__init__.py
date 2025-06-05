@@ -244,7 +244,7 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
             yield time, self.scale * x[:, -1] + self.center, restart
     
             step = 0
-            blend_alpha = 0.5  # Soft truth injection
+            blend_alpha = 1.0  # Soft truth injection
     
             while True:
                 x = self.model(x, time)
