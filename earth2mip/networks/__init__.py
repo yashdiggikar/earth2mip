@@ -257,35 +257,35 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
                     try:
                         # Get truth
                         target_levels = [50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]
-                        truth_np = self.truth_ds["t"].sel(pressure_level=target_levels).isel(valid_time=step).values
-                        truth_np = np.clip(truth_np, 180.0, 320.0)
+                        truth_np = self.truth_ds["z"].sel(pressure_level=target_levels).isel(valid_time=step).values
+                        #truth_np = np.clip(truth_np, 180.0, 320.0)
     
-                        center_t = self.center[47:60].view(1, 13, 1, 1)
-                        scale_t = self.scale[47:60].view(1, 13, 1, 1)
+                        center_t = self.center[34:47].view(1, 13, 1, 1)
+                        scale_t = self.scale[34:47].view(1, 13, 1, 1)
                         truth_tensor = torch.from_numpy(truth_np).float().unsqueeze(0).to(x.device)
                         normalized_truth = (truth_tensor - center_t) / scale_t
-                        normalized_truth = torch.clamp(normalized_truth, -3.0, 3.0)
+                        normalized_truth = torch.clamp(normalized_truth)
     
                         # Before injection: RMSE debug
-                        levels = {"t300": 5, "t500": 7, "t1000": 12}
+                        levels = {"z300": 5, "z500": 7, "z1000": 12}
                         for label, idx in levels.items():
-                            pred_val = out[:, 47 + idx].cpu().numpy()
+                            pred_val = out[:, 34 + idx].cpu().numpy()
                             true_val = truth_np[idx]
                             rmse_before = np.sqrt(np.mean((pred_val - true_val) ** 2))
                             print(f"📊 Step {step} | RMSE before injection ({label}): {rmse_before:.2f}")
     
                         # Inject into input for next step
-                        x[:, -1, 47:60] = (
+                        x[:, -1, 34:47] = (
                             blend_alpha * normalized_truth +
-                            (1 - blend_alpha) * x[:, -1, 47:60]
+                            (1 - blend_alpha) * x[:, -1, 34:47]
                         )
     
                         # Update output too
-                        out[:, 47:60] = self.scale[47:60].view(1, 13, 1, 1) * x[:, -1, 47:60] + self.center[47:60].view(1, 13, 1, 1)
+                        out[:, 34:47] = self.scale[47:60].view(1, 13, 1, 1) * x[:, -1, 47:60] + self.center[47:60].view(1, 13, 1, 1)
     
                         # After injection: RMSE debug
                         for label, idx in levels.items():
-                            updated_val = out[:, 47 + idx].cpu().numpy()
+                            updated_val = out[:, 34 + idx].cpu().numpy()
                             true_val = truth_np[idx]
                             rmse_after = np.sqrt(np.mean((updated_val - true_val) ** 2))
                             print(f"📈 Step {step} | RMSE after injection ({label}): {rmse_after:.2f}")
