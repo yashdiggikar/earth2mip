@@ -253,24 +253,34 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
     
                 out = self.scale * x[:, -1] + self.center
     
+                # Safe truth injection
                 if hasattr(self, "truth_ds") and step >= 120:
                     try:
-                        # Get truth
+                        # Target levels in your truth file:
                         target_levels = [50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]
-                        truth_np = self.truth_ds["z"].sel(pressure_level=target_levels).isel(valid_time=step).values
-                        
-                        # Convert z to meters!
+    
+                        # Find matching index for this valid_time:
+                        truth_step_idx = step
+                        valid_time_coord = self.truth_ds["valid_time"].values
+    
+                        if truth_step_idx >= len(valid_time_coord):
+                            raise ValueError(f"Truth file too short → requested step {truth_step_idx}, available {len(valid_time_coord)}")
+    
+                        # Select truth Z field
+                        truth_np = self.truth_ds["z"].sel(
+                            pressure_level=target_levels
+                        ).isel(valid_time=truth_step_idx).values  # Shape (13, 721, 1440)
+    
+                        # Convert Z to meters
                         truth_np = truth_np / 9.80665
-                        
+    
                         print(f"👉 Truth Z shape: {truth_np.shape}, min: {truth_np.min():.2f}, max: {truth_np.max():.2f}, mean: {truth_np.mean():.2f}")
     
+                        # Normalize truth to model space
                         center_z = self.center[34:47].view(1, 13, 1, 1)
                         scale_z = self.scale[34:47].view(1, 13, 1, 1)
                         truth_tensor = torch.from_numpy(truth_np).float().unsqueeze(0).to(x.device)
                         normalized_truth = (truth_tensor - center_z) / scale_z
-                        
-                        # You can clip for safety (optional), but not strictly needed:
-                        #normalized_truth = torch.clamp(normalized_truth, -3.0, 3.0)
     
                         print(f"👉 Normalized truth Z: min {normalized_truth.min().item():.2f}, max {normalized_truth.max().item():.2f}, mean {normalized_truth.mean().item():.2f}")
     
@@ -288,7 +298,7 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
                             (1 - blend_alpha) * x[:, -1, 34:47]
                         )
     
-                        # Update output too → your original line had wrong index here
+                        # Update output too
                         out[:, 34:47] = self.scale[34:47].view(1, 13, 1, 1) * x[:, -1, 34:47] + self.center[34:47].view(1, 13, 1, 1)
     
                         # After injection: RMSE debug
@@ -306,6 +316,7 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
                 # Yield forecast
                 restart = dict(x=x, normalize=False, time=time)
                 yield time, out, restart
+
 
 
 
