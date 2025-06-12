@@ -264,7 +264,7 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
                         scale_t = self.scale[34:47].view(1, 13, 1, 1)
                         truth_tensor = torch.from_numpy(truth_np).float().unsqueeze(0).to(x.device)
                         normalized_truth = (truth_tensor - center_t) / scale_t
-                        normalized_truth = torch.clamp(normalized_truth)
+                        #normalized_truth = torch.clamp(normalized_truth)
     
                         # Before injection: RMSE debug
                         levels = {"z300": 5, "z500": 7, "z1000": 12}
