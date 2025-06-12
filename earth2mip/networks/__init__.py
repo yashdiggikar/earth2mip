@@ -226,7 +226,6 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
             yield from self._iterate(x=x, time=time)
 
 
-
     def _iterate(self, x, normalize=True, time=None):
         if self.time_dependent and not time:
             raise ValueError("Time dependent models require time.")
@@ -253,62 +252,70 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
     
                 out = self.scale * x[:, -1] + self.center
     
-                # Safe truth injection
+                # u,v injection after step >= 120
                 if hasattr(self, "truth_ds") and step >= 120:
                     try:
-                        # Target levels in your truth file:
                         target_levels = [50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]
+                        truth_sel = self.truth_ds.isel(valid_time=step)
     
-                        # Find matching index for this valid_time:
-                        truth_step_idx = step
-                        valid_time_coord = self.truth_ds["valid_time"].values
+                        # ----- U component -----
+                        u_np = truth_sel["u"].sel(isobaricInhPa=target_levels).values
+                        center_u = self.center[8:21].view(1, 13, 1, 1)
+                        scale_u = self.scale[8:21].view(1, 13, 1, 1)
+                        u_tensor = torch.from_numpy(u_np).float().unsqueeze(0).to(x.device)
+                        normalized_u = (u_tensor - center_u) / scale_u
     
-                        if truth_step_idx >= len(valid_time_coord):
-                            raise ValueError(f"Truth file too short → requested step {truth_step_idx}, available {len(valid_time_coord)}")
+                        # ----- V component -----
+                        v_np = truth_sel["v"].sel(isobaricInhPa=target_levels).values
+                        center_v = self.center[21:34].view(1, 13, 1, 1)
+                        scale_v = self.scale[21:34].view(1, 13, 1, 1)
+                        v_tensor = torch.from_numpy(v_np).float().unsqueeze(0).to(x.device)
+                        normalized_v = (v_tensor - center_v) / scale_v
     
-                        # Select truth Z field
-                        truth_np = self.truth_ds["z"].sel(
-                            pressure_level=target_levels
-                        ).isel(valid_time=truth_step_idx).values  # Shape (13, 721, 1440)
+                        # --- Debug print ---
+                        print(f"👉 Truth U shape: {u_np.shape}, min: {u_np.min():.2f}, max: {u_np.max():.2f}, mean: {u_np.mean():.2f}")
+                        print(f"👉 Truth V shape: {v_np.shape}, min: {v_np.min():.2f}, max: {v_np.max():.2f}, mean: {v_np.mean():.2f}")
+                        print(f"👉 Normalized U: min {normalized_u.min().item():.2f}, max {normalized_u.max().item():.2f}, mean {normalized_u.mean().item():.2f}")
+                        print(f"👉 Normalized V: min {normalized_v.min().item():.2f}, max {normalized_v.max().item():.2f}, mean {normalized_v.mean().item():.2f}")
     
-                        # Convert Z to meters
-                        truth_np = truth_np / 9.80665
-    
-                        print(f"👉 Truth Z shape: {truth_np.shape}, min: {truth_np.min():.2f}, max: {truth_np.max():.2f}, mean: {truth_np.mean():.2f}")
-    
-                        # Normalize truth to model space
-                        center_z = self.center[34:47].view(1, 13, 1, 1)
-                        scale_z = self.scale[34:47].view(1, 13, 1, 1)
-                        truth_tensor = torch.from_numpy(truth_np).float().unsqueeze(0).to(x.device)
-                        normalized_truth = (truth_tensor - center_z) / scale_z
-    
-                        print(f"👉 Normalized truth Z: min {normalized_truth.min().item():.2f}, max {normalized_truth.max().item():.2f}, mean {normalized_truth.mean().item():.2f}")
-    
-                        # Before injection: RMSE debug
-                        levels = {"z300": 5, "z500": 7, "z1000": 12}
+                        # --- Before injection: RMSE debug ---
+                        levels = {"u300": 5, "u500": 7, "u1000": 12, "v300": 5, "v500": 7, "v1000": 12}
                         for label, idx in levels.items():
-                            pred_val = out[:, 34 + idx].cpu().numpy()
-                            true_val = truth_np[idx]
+                            if label.startswith("u"):
+                                pred_val = out[:, 8 + idx].cpu().numpy()
+                                true_val = u_np[idx]
+                            else:
+                                pred_val = out[:, 21 + idx].cpu().numpy()
+                                true_val = v_np[idx]
                             rmse_before = np.sqrt(np.mean((pred_val - true_val) ** 2))
                             print(f"📊 Step {step} | RMSE before injection ({label}): {rmse_before:.2f}")
     
-                        # Inject into input for next step
-                        x[:, -1, 34:47] = (
-                            blend_alpha * normalized_truth +
-                            (1 - blend_alpha) * x[:, -1, 34:47]
+                        # --- Inject U ---
+                        x[:, -1, 8:21] = (
+                            blend_alpha * normalized_u +
+                            (1 - blend_alpha) * x[:, -1, 8:21]
                         )
+                        out[:, 8:21] = self.scale[8:21].view(1, 13, 1, 1) * x[:, -1, 8:21] + self.center[8:21].view(1, 13, 1, 1)
     
-                        # Update output too
-                        out[:, 34:47] = self.scale[34:47].view(1, 13, 1, 1) * x[:, -1, 34:47] + self.center[34:47].view(1, 13, 1, 1)
+                        # --- Inject V ---
+                        x[:, -1, 21:34] = (
+                            blend_alpha * normalized_v +
+                            (1 - blend_alpha) * x[:, -1, 21:34]
+                        )
+                        out[:, 21:34] = self.scale[21:34].view(1, 13, 1, 1) * x[:, -1, 21:34] + self.center[21:34].view(1, 13, 1, 1)
     
-                        # After injection: RMSE debug
+                        # --- After injection: RMSE debug ---
                         for label, idx in levels.items():
-                            updated_val = out[:, 34 + idx].cpu().numpy()
-                            true_val = truth_np[idx]
+                            if label.startswith("u"):
+                                updated_val = out[:, 8 + idx].cpu().numpy()
+                                true_val = u_np[idx]
+                            else:
+                                updated_val = out[:, 21 + idx].cpu().numpy()
+                                true_val = v_np[idx]
                             rmse_after = np.sqrt(np.mean((updated_val - true_val) ** 2))
                             print(f"📈 Step {step} | RMSE after injection ({label}): {rmse_after:.2f}")
     
-                        print(f"✅ Injected truth at step {step} | Time: {time}")
+                        print(f"✅ Injected U+V truth at step {step} | Time: {time}")
     
                     except Exception as e:
                         print(f"💥 Injection error at step {step} | Time: {time} → {e}")
@@ -316,6 +323,7 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
                 # Yield forecast
                 restart = dict(x=x, normalize=False, time=time)
                 yield time, out, restart
+
 
 
 
