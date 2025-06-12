@@ -258,13 +258,21 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
                         # Get truth
                         target_levels = [50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]
                         truth_np = self.truth_ds["z"].sel(pressure_level=target_levels).isel(valid_time=step).values
-                        #truth_np = np.clip(truth_np, 180.0, 320.0)
+                        
+                        # Convert z to meters!
+                        truth_np = truth_np / 9.80665
+                        
+                        print(f"👉 Truth Z shape: {truth_np.shape}, min: {truth_np.min():.2f}, max: {truth_np.max():.2f}, mean: {truth_np.mean():.2f}")
     
-                        center_t = self.center[34:47].view(1, 13, 1, 1)
-                        scale_t = self.scale[34:47].view(1, 13, 1, 1)
+                        center_z = self.center[34:47].view(1, 13, 1, 1)
+                        scale_z = self.scale[34:47].view(1, 13, 1, 1)
                         truth_tensor = torch.from_numpy(truth_np).float().unsqueeze(0).to(x.device)
-                        normalized_truth = (truth_tensor - center_t) / scale_t
-                        #normalized_truth = torch.clamp(normalized_truth)
+                        normalized_truth = (truth_tensor - center_z) / scale_z
+                        
+                        # You can clip for safety (optional), but not strictly needed:
+                        #normalized_truth = torch.clamp(normalized_truth, -3.0, 3.0)
+    
+                        print(f"👉 Normalized truth Z: min {normalized_truth.min().item():.2f}, max {normalized_truth.max().item():.2f}, mean {normalized_truth.mean().item():.2f}")
     
                         # Before injection: RMSE debug
                         levels = {"z300": 5, "z500": 7, "z1000": 12}
@@ -280,8 +288,8 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
                             (1 - blend_alpha) * x[:, -1, 34:47]
                         )
     
-                        # Update output too
-                        out[:, 34:47] = self.scale[47:60].view(1, 13, 1, 1) * x[:, -1, 47:60] + self.center[47:60].view(1, 13, 1, 1)
+                        # Update output too → your original line had wrong index here
+                        out[:, 34:47] = self.scale[34:47].view(1, 13, 1, 1) * x[:, -1, 34:47] + self.center[34:47].view(1, 13, 1, 1)
     
                         # After injection: RMSE debug
                         for label, idx in levels.items():
@@ -298,7 +306,6 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
                 # Yield forecast
                 restart = dict(x=x, normalize=False, time=time)
                 yield time, out, restart
-
 
 
 
